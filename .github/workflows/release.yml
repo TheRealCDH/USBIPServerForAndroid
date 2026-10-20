@@ -1,0 +1,93 @@
+# Builds cgutman/USBIPServerForAndroid (unmodified source) into a signed APK and
+# publishes it as a GitHub Release for Obtainium. Runs daily; a release is only
+# made when upstream has a commit we haven't released yet.
+#
+# Only build metadata is touched: versionCode = 1000 + upstream commit count
+# (monotonic, so Android accepts it as an update) and versionName =
+# <upstream versionName>-<sha7> (matches the release tag for Obtainium).
+#
+# Secrets: KEYSTORE_B64 (base64 PKCS12, alias "release"), KEYSTORE_PASSWORD.
+name: release
+
+on:
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+  push:
+    branches: [release]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out upstream
+        uses: actions/checkout@v4
+        with:
+          repository: cgutman/USBIPServerForAndroid
+          path: src
+          fetch-depth: 0
+
+      - name: Compute version
+        id: ver
+        working-directory: src
+        run: |
+          sha=$(git rev-parse --short=7 HEAD)
+          count=$(git rev-list --count HEAD)
+          base=$(sed -n 's/.*android:versionName="\([^"]*\)".*/\1/p' app/src/main/AndroidManifest.xml)
+          echo "name=${base}-${sha}" >> "$GITHUB_OUTPUT"
+          echo "code=$((1000 + count))" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if already released
+        id: exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ steps.ver.outputs.name }}" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-java@v4
+        if: steps.exists.outputs.skip != 'true'
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Build release APK
+        if: steps.exists.outputs.skip != 'true'
+        working-directory: src
+        run: |
+          sed -i -E \
+            -e 's/android:versionCode="[0-9]+"/android:versionCode="${{ steps.ver.outputs.code }}"/' \
+            -e 's/android:versionName="[^"]*"/android:versionName="${{ steps.ver.outputs.name }}"/' \
+            app/src/main/AndroidManifest.xml
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          ./gradlew --no-daemon assembleRelease
+
+      - name: Sign APK
+        if: steps.exists.outputs.skip != 'true'
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          bt=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          out="USBIPServer-${{ steps.ver.outputs.name }}.apk"
+          "$bt/zipalign" -p -f 4 src/app/build/outputs/apk/release/app-release-unsigned.apk aligned.apk
+          "$bt/apksigner" sign --ks "$RUNNER_TEMP/release.jks" --ks-key-alias release \
+            --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEYSTORE_PASSWORD --out "$out" aligned.apk
+          "$bt/apksigner" verify --print-certs "$out"
+          rm -f "$RUNNER_TEMP/release.jks"
+          echo "APK=$out" >> "$GITHUB_ENV"
+
+      - name: Publish release
+        if: steps.exists.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha=$(git -C src rev-parse HEAD)
+          gh release create "${{ steps.ver.outputs.name }}" "$APK" -R "$GITHUB_REPOSITORY" \
+            --target release --title "${{ steps.ver.outputs.name }}" \
+            --notes "Unmodified build of cgutman/USBIPServerForAndroid@${sha}."
