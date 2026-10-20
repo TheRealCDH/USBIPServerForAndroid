@@ -1,6 +1,6 @@
 # Builds cgutman/USBIPServerForAndroid (unmodified source) into a signed APK and
-# publishes it as a GitHub Release for Obtainium. Runs daily; a release is only
-# made when upstream has a commit we haven't released yet.
+# publishes it as a GitHub Release for Obtainium. Runs only on manual dispatch or
+# a push to this branch; it skips if that upstream commit is already released.
 #
 # Only build metadata is touched: versionCode = 1000 + upstream commit count
 # (monotonic, so Android accepts it as an update) and versionName =
@@ -10,8 +10,6 @@
 name: release
 
 on:
-  schedule:
-    - cron: "17 9 * * *"
   workflow_dispatch:
   push:
     branches: [release]
