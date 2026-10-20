@@ -10,6 +10,8 @@
 #   offers "Always open USB/IP Server" on plug-in, a persistent grant. Without it
 #   the runtime permission prompt self-dismisses on GrapheneOS/Android 16 and
 #   every attach fails with "User has not given ... permission".
+# - RECORD_AUDIO: Android refuses openDevice() on any USB device with an audio
+#   capture interface (the glasses' microphone) unless the app holds it.
 #
 # Secrets: KEYSTORE_B64 (base64 PKCS12, alias "release"), KEYSTORE_PASSWORD.
 name: release
@@ -23,7 +25,7 @@ permissions:
   contents: write
 
 env:
-  PATCH_REV: "1"
+  PATCH_REV: "2"
 
 jobs:
   build:
@@ -82,6 +84,9 @@ jobs:
                       </intent-filter>
                       <meta-data android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
                           android:resource="@xml/device_filter" />""")
+          perm = '<uses-permission android:name="android.permission.INTERNET" />'
+          assert s.count(perm) == 1, "manifest layout changed upstream"
+          s = s.replace(perm, perm + '\n    <uses-permission android:name="android.permission.RECORD_AUDIO" />')
           open(p, "w").write(s)
           PY
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
