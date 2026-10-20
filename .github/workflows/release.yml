@@ -64,7 +64,7 @@ jobs:
             -e 's/android:versionName="[^"]*"/android:versionName="${{ steps.ver.outputs.name }}"/' \
             app/src/main/AndroidManifest.xml
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
-          ./gradlew --no-daemon assembleRelease
+          bash ./gradlew --no-daemon assembleRelease
 
       - name: Sign APK
         if: steps.exists.outputs.skip != 'true'
