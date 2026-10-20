@@ -2,9 +2,14 @@
 # publishes it as a GitHub Release for Obtainium. Runs only on manual dispatch or
 # a push to this branch; it skips if that upstream commit is already released.
 #
-# Only build metadata is touched: versionCode = 1000 + upstream commit count
-# (monotonic, so Android accepts it as an update) and versionName =
-# <upstream versionName>-<sha7> (matches the release tag for Obtainium).
+# Changes vs upstream:
+# - build metadata: versionCode = (1000 + upstream commit count) * 10 + PATCH_REV
+#   (monotonic, so Android accepts it as an update) and versionName =
+#   <upstream versionName>-<sha7>-p<PATCH_REV> (matches the release tag).
+# - a USB_DEVICE_ATTACHED filter for XREAL glasses (vendor 0x3318), so Android
+#   offers "Always open USB/IP Server" on plug-in, a persistent grant. Without it
+#   the runtime permission prompt self-dismisses on GrapheneOS/Android 16 and
+#   every attach fails with "User has not given ... permission".
 #
 # Secrets: KEYSTORE_B64 (base64 PKCS12, alias "release"), KEYSTORE_PASSWORD.
 name: release
@@ -16,6 +21,9 @@ on:
 
 permissions:
   contents: write
+
+env:
+  PATCH_REV: "1"
 
 jobs:
   build:
@@ -35,8 +43,8 @@ jobs:
           sha=$(git rev-parse --short=7 HEAD)
           count=$(git rev-list --count HEAD)
           base=$(sed -n 's/.*android:versionName="\([^"]*\)".*/\1/p' app/src/main/AndroidManifest.xml)
-          echo "name=${base}-${sha}" >> "$GITHUB_OUTPUT"
-          echo "code=$((1000 + count))" >> "$GITHUB_OUTPUT"
+          echo "name=${base}-${sha}-p${PATCH_REV}" >> "$GITHUB_OUTPUT"
+          echo "code=$(( (1000 + count) * 10 + PATCH_REV ))" >> "$GITHUB_OUTPUT"
 
       - name: Skip if already released
         id: exists
@@ -61,6 +69,21 @@ jobs:
             -e 's/android:versionCode="[0-9]+"/android:versionCode="${{ steps.ver.outputs.code }}"/' \
             -e 's/android:versionName="[^"]*"/android:versionName="${{ steps.ver.outputs.name }}"/' \
             app/src/main/AndroidManifest.xml
+          mkdir -p app/src/main/res/xml
+          printf '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <usb-device vendor-id="13080" />\n</resources>\n' > app/src/main/res/xml/device_filter.xml
+          python3 - <<'PY'
+          p = "app/src/main/AndroidManifest.xml"
+          s = open(p).read()
+          launcher = '<category android:name="android.intent.category.LAUNCHER" />\n            </intent-filter>'
+          assert s.count(launcher) == 1, "manifest layout changed upstream"
+          s = s.replace(launcher, launcher + """
+                      <intent-filter>
+                          <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+                      </intent-filter>
+                      <meta-data android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                          android:resource="@xml/device_filter" />""")
+          open(p, "w").write(s)
+          PY
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
           bash ./gradlew --no-daemon assembleRelease
 
