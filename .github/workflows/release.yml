@@ -12,6 +12,9 @@
 #   every attach fails with "User has not given ... permission".
 # - RECORD_AUDIO: Android refuses openDevice() on any USB device with an audio
 #   capture interface (the glasses' microphone) unless the app holds it.
+# - audio-class interfaces are not claimed, so Android keeps the device's
+#   speakers/mic while its other interfaces are exported (USB/IP can't carry
+#   isochronous audio anyway; claiming it just silenced the glasses).
 #
 # Secrets: KEYSTORE_B64 (base64 PKCS12, alias "release"), KEYSTORE_PASSWORD.
 name: release
@@ -25,7 +28,7 @@ permissions:
   contents: write
 
 env:
-  PATCH_REV: "2"
+  PATCH_REV: "3"
 
 jobs:
   build:
@@ -87,6 +90,13 @@ jobs:
           perm = '<uses-permission android:name="android.permission.INTERNET" />'
           assert s.count(perm) == 1, "manifest layout changed upstream"
           s = s.replace(perm, perm + '\n    <uses-permission android:name="android.permission.RECORD_AUDIO" />')
+          open(p, "w").write(s)
+
+          p = "app/src/main/java/org/cgutman/usbip/usb/UsbControlHelper.java"
+          s = open(p).read()
+          claim = "if (!deviceContext.devConn.claimInterface(iface, true)) {"
+          assert s.count(claim) == 1, "UsbControlHelper changed upstream"
+          s = s.replace(claim, "if (iface.getInterfaceClass() == 1) { continue; } // leave audio to Android\n\t\t\t\t\t\t" + claim)
           open(p, "w").write(s)
           PY
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
